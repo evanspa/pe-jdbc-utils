@@ -4,8 +4,7 @@
 
 A Clojure library of helper functions when working with JDBC.
 
-pe-jdbc-utils is part of the
-[pe-* Clojure Library Suite](#pe--clojure-library-suite).
+pe-jdbc-utils is part of the [pe-* Clojure Library Suite](#pe--clojure-library-suite).
 
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
