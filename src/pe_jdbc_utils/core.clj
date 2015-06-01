@@ -67,12 +67,24 @@
 
 (defmethod drop-database "postgresql"
   [db-spec database-name]
-  (with-try-catch-exec-as-query db-spec
-    (format "drop database %s" database-name)))
+  (try
+    (j/query db-spec (format "drop database %s" database-name))
+    (catch org.postgresql.util.PSQLException e
+      (let [sql-state (.getSQLState e)]
+        (cond
+          (= sql-state "3D000") false
+          (= sql-state "02000") true
+          :else (throw e))))))
 
 (defmulti create-database (fn [db-spec _] (:subprotocol db-spec)))
 
 (defmethod create-database "postgresql"
   [db-spec database-name]
-  (with-try-catch-exec-as-query db-spec
-    (format "create database %s" database-name)))
+  (try
+    (j/query db-spec (format "create database %s" database-name))
+    (catch org.postgresql.util.PSQLException e
+      (let [sql-state (.getSQLState e)]
+        (cond
+          (= sql-state "42P04") false
+          (= sql-state "02000") true
+          :else (throw e))))))
