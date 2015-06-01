@@ -40,7 +40,7 @@ development of Clojure and Java based applications.
 + **[pe-datomic-testutils](https://github.com/evanspa/pe-datomic-testutils)**: provides
   a set of helper functions to aid in unit testing Datomic-enabled functions.
 + **[pe-user-core](https://github.com/evanspa/pe-user-core)**: provides
-  a set of functions for modeling a generic user, leveraging Datomic as a
+  a set of functions for modeling a generic user, leveraging PostgreSQL as a
   backend store.
 + **[pe-user-testutils](https://github.com/evanspa/pe-user-testutils)**: a set of helper functions to aid in unit testing
 code that depends on the functionality of the pe-user-* libraries
@@ -55,7 +55,7 @@ code that depends on the functionality of the pe-user-* libraries
   a set of helper functions for unit testing web services.
 + **[pe-user-rest](https://github.com/evanspa/pe-user-rest)**: provides a set of
   functions encapsulating an abstraction modeling a user within a REST API
-  and leveraging [Datomic](http://www.datomic.com).
+  and leveraging PostgreSQL.
 + **[pe-apptxn-restsupport](https://github.com/evanspa/pe-apptxn-restsupport)**:
   provides a set of functions implementing the server-side REST layer of the
   PEAppTransaction Logging Framework.
