@@ -17,19 +17,25 @@
 (defmulti uniq-constraint-violated? (fn [db-spec _] (:subprotocol db-spec)))
 
 (defmethod uniq-constraint-violated? "postgresql"
-  [db-spec ^org.postgresql.util.PSQLException e]
-  (= "23505" (.getSQLState e)))
+  [db-spec e]
+  (let [e (if (instance? java.sql.BatchUpdateException e)
+            (.getNextException e)
+            e)]
+    (= "23505" (.getSQLState e))))
 
 (defmulti uniq-constraint-violated (fn [db-spec _] (:subprotocol db-spec)))
 
 (defmethod uniq-constraint-violated "postgresql"
-  [db-spec ^org.postgresql.util.PSQLException e]
-  (let [re #"\"([^\"]*)\""
-        sem (.getServerErrorMessage e)
-        msg (.getMessage sem)
-        captured (re-find re msg)]
-    (when (> (count captured) 1)
-      (second captured))))
+  [db-spec e]
+  (let [e (if (instance? java.sql.BatchUpdateException e)
+            (.getNextException e)
+            e)]
+    (let [re #"\"([^\"]*)\""
+          sem (.getServerErrorMessage e)
+          msg (.getMessage sem)
+          captured (re-find re msg)]
+      (when (> (count captured) 1)
+        (second captured)))))
 
 (defn incrementing-trigger-function-name
   [table column]
