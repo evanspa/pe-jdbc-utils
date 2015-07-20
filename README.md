@@ -25,7 +25,7 @@ pe-jdbc-utils is available from Clojars.  Add the following dependency to your
 `project.clj` file:
 
 ```
-[pe-jdbc-utils "0.0.6"]
+[pe-jdbc-utils "0.0.7"]
 ```
 
 ## pe-* Clojure Library Suite

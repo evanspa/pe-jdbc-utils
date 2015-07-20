@@ -129,6 +129,37 @@
       (throw e))
     (throw e)))
 
+(defn save-if-unmodified-since
+  [if-unmodified-since loaded-entity updated-at-entity-keyword do-save-fn]
+  (if (not (nil? if-unmodified-since))
+    (let [loaded-entity-updated-at (get loaded-entity updated-at-entity-keyword)]
+      (if (and (not (nil? loaded-entity-updated-at))
+               (t/after? loaded-entity-updated-at if-unmodified-since))
+        (throw (ex-info nil {:type :precondition-failed :cause :unmodified-since-check-failed}))
+        (do-save-fn)))
+    (do-save-fn)))
+
+(defn save-if-valid
+  [validation-fn entity any-issues-bit do-save-fn]
+  (let [validation-mask (validation-fn entity)]
+    (if (pos? (bit-and validation-mask any-issues-bit))
+      (throw (IllegalArgumentException. (str validation-mask)))
+      (do-save-fn))))
+
+(defn save-if-exists
+  [db-spec entity-load-fn entity-id do-save-fn]
+  (let [loaded-entity-result (entity-load-fn db-spec entity-id)]
+    (if (nil? loaded-entity-result)
+      (throw (ex-info nil {:cause :entity-not-found}))
+      (do-save-fn (nth loaded-entity-result 1)))))
+
+(defn save-if-deps-satisfied
+  [entity any-issues-bit dep-checkers do-save-fn]
+  (let [deps-not-found-mask (compute-deps-not-found-mask entity any-issues-bit dep-checkers)]
+    (if (not= 0 deps-not-found-mask)
+      (throw (IllegalArgumentException. (str deps-not-found-mask)))
+      (do-save-fn))))
+
 (defn save-entity
   [db-spec
    entity-id
@@ -142,47 +173,44 @@
    uniq-constraint-error-mask-pairs
    dep-checkers
    if-unmodified-since]
-  (let [validation-mask (validation-fn entity)]
-    (if (pos? (bit-and validation-mask any-issues-bit))
-      (throw (IllegalArgumentException. (str validation-mask)))
-      (let [loaded-entity-result (entity-load-fn db-spec entity-id)]
-        (if (nil? loaded-entity-result)
-          (throw (ex-info nil {:cause :entity-not-found}))
-          (letfn [(do-save-entity []
-                    (let [updated-at (t/now)
-                          updated-at-sql (c/to-timestamp updated-at)]
-                      (try
-                        (j/update! db-spec
-                                   table-keyword
-                                   (reduce (fn [update-entity [entity-key column-key :as pairs]]
-                                             (let [transform-fn  (if (> (count pairs) 2) (nth pairs 2) identity)]
-                                               (ucore/assoc-if-contains update-entity
-                                                                        entity
-                                                                        entity-key
-                                                                        column-key
-                                                                        transform-fn)))
-                                           {:updated_at updated-at-sql}
-                                           entity-key-pairs)
-                                   ["id = ?" entity-id])
-                        (-> entity
-                            (assoc updated-at-entity-keyword updated-at))
-                        (catch java.sql.SQLException e
-                          (handle-non-unique-sqlexception db-spec
-                                                          e
-                                                          any-issues-bit
-                                                          uniq-constraint-error-mask-pairs)))))
-                  (do-deps-check-and-save-entity []
-                    (let [deps-not-found-mask (compute-deps-not-found-mask entity any-issues-bit dep-checkers)]
-                      (if (not= 0 deps-not-found-mask)
-                        (throw (IllegalArgumentException. (str deps-not-found-mask)))
-                        (do-save-entity))))]
-            (if (not (nil? if-unmodified-since))
-              (let [loaded-entity (nth loaded-entity-result 1)
-                    loaded-entity-updated-at (get loaded-entity updated-at-entity-keyword)]
-                (if (t/after? loaded-entity-updated-at if-unmodified-since)
-                  (throw (ex-info nil {:type :precondition-failed :cause :unmodified-since-check-failed}))
-                  (do-deps-check-and-save-entity)))
-              (do-deps-check-and-save-entity))))))))
+  (letfn [(do-update-entity []
+            (let [updated-at (t/now)
+                  updated-at-sql (c/to-timestamp updated-at)]
+              (try
+                (j/update! db-spec
+                           table-keyword
+                           (reduce (fn [update-entity [entity-key column-key :as pairs]]
+                                     (let [transform-fn (if (> (count pairs) 2) (nth pairs 2) identity)]
+                                       (ucore/assoc-if-contains update-entity
+                                                                entity
+                                                                entity-key
+                                                                column-key
+                                                                transform-fn)))
+                                   {:updated_at updated-at-sql}
+                                   entity-key-pairs)
+                           ["id = ?" entity-id])
+                (-> entity
+                    (assoc updated-at-entity-keyword updated-at))
+                (catch java.sql.SQLException e
+                  (handle-non-unique-sqlexception db-spec
+                                                  e
+                                                  any-issues-bit
+                                                  uniq-constraint-error-mask-pairs)))))]
+    (save-if-valid validation-fn
+                   entity
+                   any-issues-bit
+                   #(save-if-exists db-spec
+                                    entity-load-fn
+                                    entity-id
+                                    (fn [loaded-entity]
+                                      (save-if-unmodified-since if-unmodified-since
+                                                                loaded-entity
+                                                                updated-at-entity-keyword
+                                                                (fn []
+                                                                  (save-if-deps-satisfied entity
+                                                                                          any-issues-bit
+                                                                                          dep-checkers
+                                                                                          do-update-entity))))))))
 
 (defn save-new-entity
   [db-spec
@@ -197,35 +225,37 @@
    updated-at-entity-keyword
    uniq-constraint-error-mask-pairs
    dep-checkers]
-  (let [validation-mask (validation-fn entity)]
-    (if (pos? (bit-and validation-mask any-issues-bit))
-      (throw (IllegalArgumentException. (str validation-mask)))
-      (let [deps-not-found-mask (compute-deps-not-found-mask nil any-issues-bit dep-checkers)]
-        (if (not= 0 deps-not-found-mask)
-          (throw (IllegalArgumentException. (str deps-not-found-mask)))
-          (let [created-at (t/now)
-                created-at-sql (c/to-timestamp created-at)]
-            (try
-              (j/insert! db-spec
-                         table-keyword
-                         (reduce (fn [update-entity [entity-key column-key :as pairs]]
-                                   (let [transform-fn  (if (> (count pairs) 2) (nth pairs 2) identity)]
-                                     (ucore/assoc-if-contains update-entity
-                                                              entity
-                                                              entity-key
-                                                              column-key
-                                                              transform-fn)))
-                                 (merge deps-insert-map
-                                        {:id            new-entity-id
-                                         :created_at    created-at-sql
-                                         :updated_at    created-at-sql
-                                         :updated_count 1})
-                                 entity-key-pairs))
-              (-> entity
-                  (assoc created-at-entity-keyword created-at)
-                  (assoc updated-at-entity-keyword created-at))
-              (catch java.sql.SQLException e
-                (handle-non-unique-sqlexception db-spec
-                                                e
-                                                any-issues-bit
-                                                uniq-constraint-error-mask-pairs)))))))))
+  (letfn [(do-insert-entity []
+            (let [created-at (t/now)
+                  created-at-sql (c/to-timestamp created-at)]
+              (try
+                (j/insert! db-spec
+                           table-keyword
+                           (reduce (fn [update-entity [entity-key column-key :as pairs]]
+                                     (let [transform-fn (if (> (count pairs) 2) (nth pairs 2) identity)]
+                                       (ucore/assoc-if-contains update-entity
+                                                                entity
+                                                                entity-key
+                                                                column-key
+                                                                transform-fn)))
+                                   (merge deps-insert-map
+                                          {:id            new-entity-id
+                                           :created_at    created-at-sql
+                                           :updated_at    created-at-sql
+                                           :updated_count 1})
+                                   entity-key-pairs))
+                (-> entity
+                    (assoc created-at-entity-keyword created-at)
+                    (assoc updated-at-entity-keyword created-at))
+                (catch java.sql.SQLException e
+                  (handle-non-unique-sqlexception db-spec
+                                                  e
+                                                  any-issues-bit
+                                                  uniq-constraint-error-mask-pairs)))))]
+    (save-if-valid validation-fn
+                   entity
+                   any-issues-bit
+                   #(save-if-deps-satisfied entity
+                                            any-issues-bit
+                                            dep-checkers
+                                            do-insert-entity))))
