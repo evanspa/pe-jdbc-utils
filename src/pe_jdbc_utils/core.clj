@@ -4,7 +4,8 @@
             [clj-time.core :as t]
             [clj-time.coerce :as c]
             [clojure.java.io :refer [resource]]
-            [clojure.tools.logging :as log]))
+            [clojure.tools.logging :as log]
+            [pe-core-utils.core :as ucore]))
 
 (defmulti seq-next-val (fn [db-spec _] (:subprotocol db-spec)))
 
@@ -94,3 +95,139 @@
           (= sql-state "42P04") false
           (= sql-state "02000") true
           :else (throw e))))))
+
+(defn compute-deps-not-found-mask
+  [entity any-issues-mask dep-checkers]
+  (reduce (fn [mask [entity-load-fn dep-id-or-key dep-not-exist-mask]]
+            (letfn [(do-dep-check [dep-id]
+                      (let [loaded-entity-result (entity-load-fn dep-id)]
+                        (if (nil? loaded-entity-result)
+                          (bit-or mask dep-not-exist-mask any-issues-mask)
+                          mask)))]
+              (if (keyword? dep-id-or-key)
+                (if (contains? entity dep-id-or-key)
+                  (do-dep-check (get entity dep-id-or-key))
+                  mask)
+                (do-dep-check dep-id-or-key))))
+          0
+          dep-checkers))
+
+(defn handle-non-unique-sqlexception
+  [db-spec e any-issues-bit uniq-constraint-error-mask-pairs]
+  (if (not (nil? uniq-constraint-error-mask-pairs))
+    (if (uniq-constraint-violated? db-spec e)
+      (let [ucv (uniq-constraint-violated db-spec e)]
+        (let [mask (reduce (fn [mask [constraint-name already-exists-mask-bit]]
+                             (if (= ucv constraint-name)
+                               (bit-or mask already-exists-mask-bit any-issues-bit)
+                               mask))
+                           0
+                           uniq-constraint-error-mask-pairs)]
+          (if (not= mask 0)
+            (throw (IllegalArgumentException. (str mask)))
+            (throw e))))
+      (throw e))
+    (throw e)))
+
+(defn save-entity
+  [db-spec
+   entity-id
+   entity
+   validation-fn
+   any-issues-bit
+   entity-load-fn
+   table-keyword
+   entity-key-pairs
+   updated-at-entity-keyword
+   uniq-constraint-error-mask-pairs
+   dep-checkers
+   if-unmodified-since]
+  (let [validation-mask (validation-fn entity)]
+    (if (pos? (bit-and validation-mask any-issues-bit))
+      (throw (IllegalArgumentException. (str validation-mask)))
+      (let [loaded-entity-result (entity-load-fn db-spec entity-id)]
+        (if (nil? loaded-entity-result)
+          (throw (ex-info nil {:cause :entity-not-found}))
+          (letfn [(do-save-entity []
+                    (let [updated-at (t/now)
+                          updated-at-sql (c/to-timestamp updated-at)]
+                      (try
+                        (j/update! db-spec
+                                   table-keyword
+                                   (reduce (fn [update-entity [entity-key column-key :as pairs]]
+                                             (let [transform-fn  (if (> (count pairs) 2) (nth pairs 2) identity)]
+                                               (ucore/assoc-if-contains update-entity
+                                                                        entity
+                                                                        entity-key
+                                                                        column-key
+                                                                        transform-fn)))
+                                           {:updated_at updated-at-sql}
+                                           entity-key-pairs)
+                                   ["id = ?" entity-id])
+                        (-> entity
+                            (assoc updated-at-entity-keyword updated-at))
+                        (catch java.sql.SQLException e
+                          (handle-non-unique-sqlexception db-spec
+                                                          e
+                                                          any-issues-bit
+                                                          uniq-constraint-error-mask-pairs)))))
+                  (do-deps-check-and-save-entity []
+                    (let [deps-not-found-mask (compute-deps-not-found-mask entity any-issues-bit dep-checkers)]
+                      (if (not= 0 deps-not-found-mask)
+                        (throw (IllegalArgumentException. (str deps-not-found-mask)))
+                        (do-save-entity))))]
+            (if (not (nil? if-unmodified-since))
+              (let [loaded-entity (nth loaded-entity-result 1)
+                    loaded-entity-updated-at (get loaded-entity updated-at-entity-keyword)]
+                (if (t/after? loaded-entity-updated-at if-unmodified-since)
+                  (throw (ex-info nil {:type :precondition-failed :cause :unmodified-since-check-failed}))
+                  (do-deps-check-and-save-entity)))
+              (do-deps-check-and-save-entity))))))))
+
+(defn save-new-entity
+  [db-spec
+   user-id
+   new-entity-id
+   entity
+   validation-fn
+   any-issues-bit
+   table-keyword
+   entity-key-pairs
+   addl-parents-map
+   created-at-entity-keyword
+   updated-at-entity-keyword
+   uniq-constraint-error-mask-pairs
+   dep-checkers]
+  (let [validation-mask (validation-fn entity)]
+    (if (pos? (bit-and validation-mask any-issues-bit))
+      (throw (IllegalArgumentException. (str validation-mask)))
+      (let [deps-not-found-mask (compute-deps-not-found-mask nil any-issues-bit dep-checkers)]
+        (if (not= 0 deps-not-found-mask)
+          (throw (IllegalArgumentException. (str deps-not-found-mask)))
+          (let [created-at (t/now)
+                created-at-sql (c/to-timestamp created-at)]
+            (try
+              (j/insert! db-spec
+                         table-keyword
+                         (reduce (fn [update-entity [entity-key column-key :as pairs]]
+                                   (let [transform-fn  (if (> (count pairs) 2) (nth pairs 2) identity)]
+                                     (ucore/assoc-if-contains update-entity
+                                                              entity
+                                                              entity-key
+                                                              column-key
+                                                              transform-fn)))
+                                 (merge addl-parents-map
+                                        {:user_id       user-id
+                                         :id            new-entity-id
+                                         :created_at    created-at-sql
+                                         :updated_at    created-at-sql
+                                         :updated_count 1})
+                                 entity-key-pairs))
+              (-> entity
+                  (assoc created-at-entity-keyword created-at)
+                  (assoc updated-at-entity-keyword created-at))
+              (catch java.sql.SQLException e
+                (handle-non-unique-sqlexception db-spec
+                                                e
+                                                any-issues-bit
+                                                uniq-constraint-error-mask-pairs)))))))))
