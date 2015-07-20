@@ -186,14 +186,13 @@
 
 (defn save-new-entity
   [db-spec
-   user-id
    new-entity-id
    entity
    validation-fn
    any-issues-bit
    table-keyword
    entity-key-pairs
-   addl-parents-map
+   deps-insert-map
    created-at-entity-keyword
    updated-at-entity-keyword
    uniq-constraint-error-mask-pairs
@@ -216,9 +215,8 @@
                                                               entity-key
                                                               column-key
                                                               transform-fn)))
-                                 (merge addl-parents-map
-                                        {:user_id       user-id
-                                         :id            new-entity-id
+                                 (merge deps-insert-map
+                                        {:id            new-entity-id
                                          :created_at    created-at-sql
                                          :updated_at    created-at-sql
                                          :updated_count 1})
