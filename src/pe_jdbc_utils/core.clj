@@ -286,16 +286,17 @@
   (if active-only " and deleted_at is null" ""))
 
 (defn load-entity-by-col
-  [db-spec table col col-val rs->entity-fn active-only]
+  [db-spec table col op col-val rs->entity-fn active-only]
   {:pre [(not (empty? table))
          (not (empty? col))
          (not (nil? col-val))
          (not (and (string? col-val)
                    (empty? col-val)))]}
   (let [rs (j/query db-spec
-                    [(format "select * from %s where %s = ?%s"
+                    [(format "select * from %s where %s %s ?%s"
                              table
                              col
+                             op
                              (active-only-where active-only)) col-val]
                     :result-set-fn first)]
     (when rs
@@ -305,6 +306,7 @@
   [db-spec
    table
    col
+   op
    col-val
    order-by-col
    order-by-direction
@@ -316,9 +318,10 @@
          (not (and (string? col-val)
                    (empty? col-val)))]}
   (j/query db-spec
-           [(format "select * from %s where %s = ?%s order by %s %s"
+           [(format "select * from %s where %s %s ?%s order by %s %s"
                     table
                     col
+                    op
                     (active-only-where active-only)
                     order-by-col
                     order-by-direction)
