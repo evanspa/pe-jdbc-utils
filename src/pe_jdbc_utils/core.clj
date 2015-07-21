@@ -280,3 +280,47 @@
                                             any-issues-bit
                                             dep-checkers
                                             do-insert-entity))))
+
+(defn active-only-where
+  [active-only]
+  (if active-only " and deleted_at is null" ""))
+
+(defn load-entity-by-col
+  [db-spec table col col-val rs->entity-fn active-only]
+  {:pre [(not (empty? table))
+         (not (empty? col))
+         (not (nil? col-val))
+         (not (and (string? col-val)
+                   (empty? col-val)))]}
+  (let [rs (j/query db-spec
+                    [(format "select * from %s where %s = ?%s"
+                             table
+                             col
+                             (active-only-where active-only)) col-val]
+                    :result-set-fn first)]
+    (when rs
+      (rs->entity-fn rs))))
+
+(defn load-entities-by-col
+  [db-spec
+   table
+   col
+   col-val
+   order-by-col
+   order-by-direction
+   rs->entity-fn
+   active-only]
+  {:pre [(not (empty? table))
+         (not (empty? col))
+         (not (nil? col-val))
+         (not (and (string? col-val)
+                   (empty? col-val)))]}
+  (j/query db-spec
+           [(format "select * from %s where %s = ?%s order by %s %s"
+                    table
+                    col
+                    (active-only-where active-only)
+                    order-by-col
+                    order-by-direction)
+            col-val]
+           :row-fn rs->entity-fn))
