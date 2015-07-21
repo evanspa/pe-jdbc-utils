@@ -38,31 +38,45 @@
       (when (> (count captured) 1)
         (second captured)))))
 
-(defn incrementing-trigger-function-name
+(defn inc-trigger-fn-name
   [table column]
   (format "%s_%s_inc" table column));
 
-(defmulti auto-incremented-trigger-function (fn [db-spec _ _] (:subprotocol db-spec)))
+(defmulti auto-inc-trigger-fn (fn [db-spec _ _] (:subprotocol db-spec)))
 
-(defmethod auto-incremented-trigger-function "postgresql"
+(defmethod auto-inc-trigger-fn "postgresql"
   [db-spec table column]
   (str (format "CREATE FUNCTION %s() RETURNS TRIGGER AS '"
-               (incrementing-trigger-function-name table column))
+               (inc-trigger-fn-name table column))
        "BEGIN "
        (format "NEW.%s := OLD.%s + 1; " column column)
        "RETURN NEW; "
        "END; "
        "' LANGUAGE 'plpgsql'"))
 
-(defmulti auto-incremented-trigger (fn [db-spec _ _ _] (:subprotocol db-spec)))
+(defmulti auto-inc-trigger-single-non-nil-cond-fn (fn [db-spec _ _ _] (:subprotocol db-spec)))
 
-(defmethod auto-incremented-trigger "postgresql"
-  [db-spec table column trigger-function]
+(defmethod auto-inc-trigger-single-non-nil-cond-fn "postgresql"
+  [db-spec table column cond-col]
+  (str (format "CREATE FUNCTION %s() RETURNS TRIGGER AS '"
+               (inc-trigger-fn-name table column))
+       "BEGIN "
+       (format "IF (OLD.%s IS NULL) AND (NEW.%s IS NOT NULL) THEN " cond-col cond-col)
+       (format "NEW.%s := OLD.%s + 1; " column column)
+       "END IF;"
+       "RETURN NEW; "
+       "END; "
+       "' LANGUAGE 'plpgsql'"))
+
+(defmulti auto-inc-trigger (fn [db-spec _ _ _] (:subprotocol db-spec)))
+
+(defmethod auto-inc-trigger "postgresql"
+  [db-spec table column trigger-fn]
   (str (format "CREATE TRIGGER %s_trigger BEFORE UPDATE ON %s "
                column
                table)
        (format "FOR EACH ROW EXECUTE PROCEDURE %s();"
-               (incrementing-trigger-function-name table column))))
+               (inc-trigger-fn-name table column))))
 
 (defn with-try-catch-exec-as-query
   [db-spec stmt]
@@ -141,10 +155,12 @@
 
 (defn save-if-valid
   [validation-fn entity any-issues-bit do-save-fn]
-  (let [validation-mask (validation-fn entity)]
-    (if (pos? (bit-and validation-mask any-issues-bit))
-      (throw (IllegalArgumentException. (str validation-mask)))
-      (do-save-fn))))
+  (if validation-fn
+    (let [validation-mask (validation-fn entity)]
+      (if (pos? (bit-and validation-mask any-issues-bit))
+        (throw (IllegalArgumentException. (str validation-mask)))
+        (do-save-fn)))
+    (do-save-fn)))
 
 (defn save-if-exists
   [db-spec entity-load-fn entity-id do-save-fn]
@@ -160,18 +176,34 @@
       (throw (IllegalArgumentException. (str deps-not-found-mask)))
       (do-save-fn))))
 
-(defn mark-entity-as-deleted
+(defn save-rawmap
   [db-spec
    entity-id
+   rawmap
+   any-issues-bit
    entity-load-fn
    table-keyword
    updated-at-entity-keyword
+   uniq-constraint-error-mask-pairs
    if-unmodified-since]
-  (letfn [(do-mark-as-deleted []
-            (j/update! db-spec
-                       table-keyword
-                       {:deleted_at (c/to-timestamp (t/now))}
-                       ["id = ?" entity-id]))]
+  (letfn [(do-update-entity []
+            (let [updated-at (t/now)
+                  updated-at-sql (c/to-timestamp updated-at)]
+              (try
+                (j/update! db-spec
+                           table-keyword
+                           (merge rawmap
+                                  {:updated_at updated-at-sql}) ; fyi, updated_count gets updated via a trigger
+                           ["id = ?" entity-id])
+                ; so caller has latest entity with up-to-date updated_at and
+                ; updated_count values
+                (entity-load-fn db-spec entity-id)
+                (catch java.sql.SQLException e
+                  (handle-non-unique-sqlexception db-spec
+                                                  e
+                                                  any-issues-bit
+                                                  uniq-constraint-error-mask-pairs)))))]
+    ; whenever we save ANYTHING, we do if-exists and if-unmodified-since checks
     (save-if-exists db-spec
                     entity-load-fn
                     entity-id
@@ -179,7 +211,42 @@
                       (save-if-unmodified-since if-unmodified-since
                                                 loaded-entity
                                                 updated-at-entity-keyword
-                                                do-mark-as-deleted)))))
+                                                do-update-entity)))))
+
+(defn mark-entity-as-deleted
+  [db-spec
+   entity-id
+   entity-load-fn
+   table-keyword
+   updated-at-entity-keyword
+   if-unmodified-since]
+  (save-rawmap db-spec
+               entity-id
+               {:deleted_at (c/to-timestamp (t/now))}
+               nil
+               entity-load-fn
+               table-keyword
+               updated-at-entity-keyword
+               nil
+               if-unmodified-since))
+
+(defn entity-key-pairs->rawmap
+  [entity entity-key-pairs]
+  (reduce (fn [update-entity [entity-key column-key :as pairs]]
+            (let [third-entry (if (> (count pairs) 2)
+                                (nth pairs 2)
+                                identity)]
+              (if (fn? third-entry)
+                (let [transform-fn third-entry]
+                  (ucore/assoc-if-contains update-entity
+                                           entity
+                                           entity-key
+                                           column-key
+                                           transform-fn))
+                (let [column-val third-entry]
+                  (assoc update-entity column-key column-val)))))
+          {}
+          entity-key-pairs))
 
 (defn save-entity
   [db-spec
@@ -194,44 +261,22 @@
    uniq-constraint-error-mask-pairs
    dep-checkers
    if-unmodified-since]
-  (letfn [(do-update-entity []
-            (let [updated-at (t/now)
-                  updated-at-sql (c/to-timestamp updated-at)]
-              (try
-                (j/update! db-spec
-                           table-keyword
-                           (reduce (fn [update-entity [entity-key column-key :as pairs]]
-                                     (let [transform-fn (if (> (count pairs) 2) (nth pairs 2) identity)]
-                                       (ucore/assoc-if-contains update-entity
-                                                                entity
-                                                                entity-key
-                                                                column-key
-                                                                transform-fn)))
-                                   {:updated_at updated-at-sql}
-                                   entity-key-pairs)
-                           ["id = ?" entity-id])
-                (-> entity
-                    (assoc updated-at-entity-keyword updated-at))
-                (catch java.sql.SQLException e
-                  (handle-non-unique-sqlexception db-spec
-                                                  e
-                                                  any-issues-bit
-                                                  uniq-constraint-error-mask-pairs)))))]
-    (save-if-valid validation-fn
-                   entity
-                   any-issues-bit
-                   #(save-if-exists db-spec
-                                    entity-load-fn
-                                    entity-id
-                                    (fn [loaded-entity]
-                                      (save-if-unmodified-since if-unmodified-since
-                                                                loaded-entity
-                                                                updated-at-entity-keyword
-                                                                (fn []
-                                                                  (save-if-deps-satisfied entity
-                                                                                          any-issues-bit
-                                                                                          dep-checkers
-                                                                                          do-update-entity))))))))
+  (save-if-valid validation-fn
+                 entity
+                 any-issues-bit
+                 #(save-if-deps-satisfied entity
+                                          any-issues-bit
+                                          dep-checkers
+                                          (fn []
+                                            (save-rawmap db-spec
+                                                         entity-id
+                                                         (entity-key-pairs->rawmap entity entity-key-pairs)
+                                                         any-issues-bit
+                                                         entity-load-fn
+                                                         table-keyword
+                                                         updated-at-entity-keyword
+                                                         uniq-constraint-error-mask-pairs
+                                                         if-unmodified-since)))))
 
 (defn save-new-entity
   [db-spec
@@ -239,6 +284,7 @@
    entity
    validation-fn
    any-issues-bit
+   entity-load-fn
    table-keyword
    entity-key-pairs
    deps-insert-map
@@ -252,22 +298,15 @@
               (try
                 (j/insert! db-spec
                            table-keyword
-                           (reduce (fn [update-entity [entity-key column-key :as pairs]]
-                                     (let [transform-fn (if (> (count pairs) 2) (nth pairs 2) identity)]
-                                       (ucore/assoc-if-contains update-entity
-                                                                entity
-                                                                entity-key
-                                                                column-key
-                                                                transform-fn)))
-                                   (merge deps-insert-map
-                                          {:id            new-entity-id
-                                           :created_at    created-at-sql
-                                           :updated_at    created-at-sql
-                                           :updated_count 1})
-                                   entity-key-pairs))
-                (-> entity
-                    (assoc created-at-entity-keyword created-at)
-                    (assoc updated-at-entity-keyword created-at))
+                           (merge (entity-key-pairs->rawmap entity entity-key-pairs)
+                                  deps-insert-map
+                                  {:id            new-entity-id
+                                   :created_at    created-at-sql
+                                   :updated_at    created-at-sql
+                                   :updated_count 1}))
+                ; so caller has latest entity with up-to-date updated_at and
+                ; updated_count, etc values
+                (entity-load-fn db-spec new-entity-id)
                 (catch java.sql.SQLException e
                   (handle-non-unique-sqlexception db-spec
                                                   e
