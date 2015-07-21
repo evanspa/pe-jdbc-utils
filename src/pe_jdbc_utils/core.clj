@@ -160,6 +160,27 @@
       (throw (IllegalArgumentException. (str deps-not-found-mask)))
       (do-save-fn))))
 
+(defn mark-entity-as-deleted
+  [db-spec
+   entity-id
+   entity-load-fn
+   table-keyword
+   updated-at-entity-keyword
+   if-unmodified-since]
+  (letfn [(do-mark-as-deleted []
+            (j/update! db-spec
+                       table-keyword
+                       {:deleted_at (c/to-timestamp (t/now))}
+                       ["id = ?" entity-id]))]
+    (save-if-exists db-spec
+                    entity-load-fn
+                    entity-id
+                    (fn [loaded-entity]
+                      (save-if-unmodified-since if-unmodified-since
+                                                loaded-entity
+                                                updated-at-entity-keyword
+                                                do-mark-as-deleted)))))
+
 (defn save-entity
   [db-spec
    entity-id
