@@ -238,7 +238,7 @@
                 entity-id
                 (merge {:deleted_at (c/to-timestamp (t/now))} addl-map)
                 nil
-                (fn [db-spec user-id] (entity-load-fn db-spec user-id false))
+                (fn [db-spec entity-id] (entity-load-fn db-spec entity-id false))
                 table-keyword
                 updated-at-entity-keyword
                 nil
@@ -338,8 +338,20 @@
   [active-only]
   (if active-only " and deleted_at is null" ""))
 
+(defn order-by
+  [order-by-col order-direction]
+  (if order-by-col
+    (format " order by %s %s" order-by-col order-direction)
+    ""))
+
 (defn load-entity-by-col
-  [db-spec table col op col-val rs->entity-fn active-only]
+  [db-spec
+   table
+   col
+   op
+   col-val
+   rs->entity-fn
+   active-only]
   {:pre [(not (empty? table))
          (not (empty? col))
          (not (nil? col-val))
@@ -356,27 +368,42 @@
       (rs->entity-fn rs))))
 
 (defn load-entities-by-col
-  [db-spec
-   table
-   col
-   op
-   col-val
-   order-by-col
-   order-by-direction
-   rs->entity-fn
-   active-only]
-  {:pre [(not (empty? table))
-         (not (empty? col))
-         (not (nil? col-val))
-         (not (and (string? col-val)
-                   (empty? col-val)))]}
-  (j/query db-spec
-           [(format "select * from %s where %s %s ?%s order by %s %s"
-                    table
-                    col
-                    op
-                    (active-only-where active-only)
-                    order-by-col
-                    order-by-direction)
-            col-val]
-           :row-fn rs->entity-fn))
+  ([db-spec
+    table
+    col
+    op
+    col-val
+    rs->entity-fn
+    active-only]
+   (load-entities-by-col db-spec
+                         table
+                         col
+                         op
+                         col-val
+                         nil
+                         nil
+                         rs->entity-fn
+                         active-only))
+  ([db-spec
+    table
+    col
+    op
+    col-val
+    order-by-col
+    order-by-direction
+    rs->entity-fn
+    active-only]
+   {:pre [(not (empty? table))
+          (not (empty? col))
+          (not (nil? col-val))
+          (not (and (string? col-val)
+                    (empty? col-val)))]}
+   (j/query db-spec
+            [(format "select * from %s where %s %s ?%s%s"
+                     table
+                     col
+                     op
+                     (active-only-where active-only)
+                     (order-by order-by-col order-by-direction))
+             col-val]
+            :row-fn rs->entity-fn)))
