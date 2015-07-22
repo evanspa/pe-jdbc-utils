@@ -214,21 +214,35 @@
                                                 do-update-entity)))))
 
 (defn mark-entity-as-deleted
-  [db-spec
-   entity-id
-   entity-load-fn
-   table-keyword
-   updated-at-entity-keyword
-   if-unmodified-since]
-  (save-rawmap db-spec
-               entity-id
-               {:deleted_at (c/to-timestamp (t/now))}
-               nil
-               entity-load-fn
-               table-keyword
-               updated-at-entity-keyword
-               nil
-               if-unmodified-since))
+  ([db-spec
+    entity-id
+    entity-load-fn
+    table-keyword
+    updated-at-entity-keyword
+    if-unmodified-since]
+   (mark-entity-as-deleted db-spec
+                           entity-id
+                           entity-load-fn
+                           table-keyword
+                           updated-at-entity-keyword
+                           if-unmodified-since
+                           nil))
+  ([db-spec
+    entity-id
+    entity-load-fn
+    table-keyword
+    updated-at-entity-keyword
+    if-unmodified-since
+    addl-map]
+   (save-rawmap db-spec
+                entity-id
+                (merge {:deleted_at (c/to-timestamp (t/now))} addl-map)
+                nil
+                (fn [db-spec user-id] (entity-load-fn db-spec user-id false))
+                table-keyword
+                updated-at-entity-keyword
+                nil
+                if-unmodified-since)))
 
 (defn entity-key-pairs->rawmap
   [entity entity-key-pairs]
