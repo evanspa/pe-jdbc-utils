@@ -149,7 +149,9 @@
     (let [loaded-entity-updated-at (get loaded-entity updated-at-entity-keyword)]
       (if (and (not (nil? loaded-entity-updated-at))
                (t/after? loaded-entity-updated-at if-unmodified-since))
-        (throw (ex-info nil {:type :precondition-failed :cause :unmodified-since-check-failed}))
+        (throw (ex-info nil {:type :precondition-failed
+                             :cause :unmodified-since-check-failed
+                             :latest-entity loaded-entity}))
         (do-save-fn)))
     (do-save-fn)))
 
