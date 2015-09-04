@@ -369,6 +369,40 @@
     (when rs
       (rs->entity-fn rs))))
 
+(defn load-entity-by-2cols
+  [db-spec
+   table
+   col-1
+   op-1
+   col-val-1
+   col-2
+   op-2
+   col-val-2
+   rs->entity-fn
+   active-only]
+  {:pre [(not (empty? table))
+         (not (empty? col-1))
+         (not (nil? col-val-1))
+         (not (and (string? col-val-1)
+                   (empty? col-val-1)))
+         (not (empty? col-2))
+         (not (nil? col-val-2))
+         (not (and (string? col-val-2)
+                   (empty? col-val-2)))]}
+  (let [rs (j/query db-spec
+                    [(format "select * from %s where %s %s ? and %s %s ?%s"
+                             table
+                             col-1
+                             op-1
+                             col-2
+                             op-2
+                             (active-only-where active-only))
+                     col-val-1
+                     col-val-2]
+                    :result-set-fn first)]
+    (when rs
+      (rs->entity-fn rs))))
+
 (defn load-entities-by-col
   ([db-spec
     table
@@ -409,3 +443,119 @@
                      (order-by order-by-col order-by-direction))
              col-val]
             :row-fn rs->entity-fn)))
+
+(defn load-entities-modified-since
+  [db-spec
+   table
+   col
+   op
+   col-val
+   updated-at-col
+   deleted-at-col
+   modified-since
+   rs->entity-fn]
+  {:pre [(not (empty? table))
+         (not (empty? col))
+         (not (nil? col-val))
+         (not (nil? updated-at-col))
+         (not (nil? modified-since))
+         (not (and (string? col-val)
+                   (empty? col-val)))]}
+  (let [modified-since-sql (c/to-timestamp modified-since)]
+    (j/query db-spec
+             [(format "select * from %s where %s %s ? and %s > ? or %s > ?"
+                      table
+                      col
+                      op
+                      updated-at-col
+                      deleted-at-col)
+              col-val
+              modified-since-sql
+              modified-since-sql]
+             :row-fn rs->entity-fn)))
+
+(defn most-recent-modified-at
+  [db-spec
+   modified-since
+   table
+   col
+   op
+   col-val
+   updated-at-col
+   deleted-at-col]
+  (let [modified-since-sql (c/to-timestamp modified-since)
+        rs (j/query db-spec
+                    [(format "select max(greatest(%s, %s)) from %s where %s %s ? and %s > ? or %s > ?"
+                             updated-at-col
+                             deleted-at-col
+                             table
+                             col
+                             op
+                             updated-at-col
+                             deleted-at-col)
+                     col-val
+                     modified-since-sql
+                     modified-since-sql]
+                    :result-set-fn first)]
+    (c/from-sql-time (:max rs))))
+
+(defn most-recent-modified-at-overall
+  [db-spec
+   modified-since
+   tables]
+  (reduce (fn [most-recent [table col op col-val updated-at-col deleted-at-col]]
+            (let [updated-at (most-recent-modified-at db-spec
+                                                      modified-since
+                                                      table
+                                                      col
+                                                      op
+                                                      col-val
+                                                      updated-at-col
+                                                      deleted-at-col)]
+              (if (not (nil? updated-at))
+                (if (t/after? updated-at most-recent)
+                  updated-at
+                  most-recent)
+                most-recent)))
+          modified-since
+          tables))
+
+(defn entities-modified-since
+  [db-spec
+   table
+   col
+   op
+   col-val
+   updated-at-col
+   deleted-at-col
+   modified-since
+   id-keyword
+   deleted-at-keyword
+   updated-at-keyword
+   rs->entity-fn]
+  (let [entities (load-entities-modified-since db-spec
+                                               table
+                                               col
+                                               op
+                                               col-val
+                                               updated-at-col
+                                               deleted-at-col
+                                               modified-since
+                                               rs->entity-fn)]
+    (reduce (fn [{most-recent-modified-at :most-recent-modified-at
+                  entities :entities
+                  :as changelog}
+                 [entity-id entity]]
+              (let [deleted-at (get entity deleted-at-keyword)]
+                (if (not (nil? deleted-at))
+                  (-> changelog
+                      (assoc :entities (conj entities [entity-id  (-> {}
+                                                                      (assoc id-keyword (get entity id-keyword))
+                                                                      (assoc deleted-at-keyword deleted-at))]))
+                      (assoc :most-recent-modified-at (if (t/after? deleted-at most-recent-modified-at) deleted-at most-recent-modified-at)))
+                  (let [updated-at (get entity updated-at-keyword)]
+                    (-> changelog
+                        (assoc :entities (conj entities [entity-id entity]))
+                        (assoc :most-recent-modified-at (if (t/after? updated-at most-recent-modified-at) updated-at most-recent-modified-at)))))))
+            {:entities [] :most-recent-modified-at modified-since}
+            entities)))
