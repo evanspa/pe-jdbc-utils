@@ -240,7 +240,7 @@
                 entity-id
                 (merge {:deleted_at (c/to-timestamp (t/now))} addl-map)
                 nil
-                (fn [db-spec entity-id] (entity-load-fn db-spec entity-id false))
+                entity-load-fn
                 table-keyword
                 updated-at-entity-keyword
                 nil
