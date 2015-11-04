@@ -337,8 +337,12 @@
                                             do-insert-entity))))
 
 (defn active-only-where
-  [active-only]
-  (if active-only " and deleted_at is null" ""))
+  ([active-only]
+   (active-only-where true active-only))
+  ([include-and active-only]
+   (if active-only
+     (format "%sdeleted_at is null" (if include-and " and " ""))
+     "")))
 
 (defn order-by
   [order-by-col order-direction]
@@ -465,7 +469,7 @@
    (j/query db-spec
             [(format "select * from %s where %s%s"
                      table
-                     (active-only-where active-only)
+                     (active-only-where false active-only)
                      (order-by order-by-col order-by-direction))]
             :row-fn rs->entity-fn)))
 
