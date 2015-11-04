@@ -444,6 +444,31 @@
              col-val]
             :row-fn rs->entity-fn)))
 
+(defn load-entities
+  ([db-spec
+    table
+    rs->entity-fn
+    active-only]
+   (load-entities db-spec
+                  table
+                  nil
+                  nil
+                  rs->entity-fn
+                  active-only))
+  ([db-spec
+    table
+    order-by-col
+    order-by-direction
+    rs->entity-fn
+    active-only]
+   {:pre [(not (empty? table))]}
+   (j/query db-spec
+            [(format "select * from %s where %s%s"
+                     table
+                     (active-only-where active-only)
+                     (order-by order-by-col order-by-direction))]
+            :row-fn rs->entity-fn)))
+
 (defn load-entities-modified-since
   [db-spec
    table
