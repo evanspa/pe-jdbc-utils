@@ -7,7 +7,11 @@
             [clojure.tools.logging :as log]
             [pe-core-utils.core :as ucore]))
 
-(defmulti seq-next-val (fn [db-spec _] (:subprotocol db-spec)))
+(defn- subprotocol
+  [db-spec]
+  (:subprotocol (meta db-spec)))
+
+(defmulti seq-next-val (fn [db-spec _] (subprotocol db-spec)))
 
 (defmethod seq-next-val "postgresql"
   [db-spec seq-name]
@@ -15,7 +19,7 @@
                      [(format "select nextval('%s')" seq-name)]
                      :result-set-fn first)))
 
-(defmulti uniq-constraint-violated? (fn [db-spec _] (:subprotocol db-spec)))
+(defmulti uniq-constraint-violated? (fn [db-spec _] (subprotocol db-spec)))
 
 (defmethod uniq-constraint-violated? "postgresql"
   [db-spec e]
@@ -24,7 +28,7 @@
             e)]
     (= "23505" (.getSQLState e))))
 
-(defmulti uniq-constraint-violated (fn [db-spec _] (:subprotocol db-spec)))
+(defmulti uniq-constraint-violated (fn [db-spec _] (subprotocol db-spec)))
 
 (defmethod uniq-constraint-violated "postgresql"
   [db-spec e]
@@ -42,7 +46,7 @@
   [table column]
   (format "%s_%s_inc" table column));
 
-(defmulti auto-inc-trigger-fn (fn [db-spec _ _] (:subprotocol db-spec)))
+(defmulti auto-inc-trigger-fn (fn [db-spec _ _] (subprotocol db-spec)))
 
 (defmethod auto-inc-trigger-fn "postgresql"
   [db-spec table column]
@@ -54,7 +58,7 @@
        "END; "
        "' LANGUAGE 'plpgsql'"))
 
-(defmulti auto-inc-trigger-single-non-nil-cond-fn (fn [db-spec _ _ _] (:subprotocol db-spec)))
+(defmulti auto-inc-trigger-single-non-nil-cond-fn (fn [db-spec _ _ _] (subprotocol db-spec)))
 
 (defmethod auto-inc-trigger-single-non-nil-cond-fn "postgresql"
   [db-spec table column cond-col]
@@ -68,7 +72,7 @@
        "END; "
        "' LANGUAGE 'plpgsql'"))
 
-(defmulti auto-inc-trigger (fn [db-spec _ _ _] (:subprotocol db-spec)))
+(defmulti auto-inc-trigger (fn [db-spec _ _ _] (subprotocol db-spec)))
 
 (defmethod auto-inc-trigger "postgresql"
   [db-spec table column trigger-fn]
@@ -84,7 +88,7 @@
     (j/query db-spec stmt)
     (catch Exception e)))
 
-(defmulti drop-database (fn [db-spec _] (:subprotocol db-spec)))
+(defmulti drop-database (fn [db-spec _] (subprotocol db-spec)))
 
 (defmethod drop-database "postgresql"
   [db-spec database-name]
@@ -97,7 +101,7 @@
           (= sql-state "02000") true
           :else (throw e))))))
 
-(defmulti create-database (fn [db-spec _] (:subprotocol db-spec)))
+(defmulti create-database (fn [db-spec _] (subprotocol db-spec)))
 
 (defmethod create-database "postgresql"
   [db-spec database-name]
