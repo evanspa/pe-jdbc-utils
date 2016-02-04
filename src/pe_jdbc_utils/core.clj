@@ -126,7 +126,9 @@
                 (if (contains? entity dep-id-or-key)
                   (do-dep-check (get entity dep-id-or-key))
                   mask)
-                (do-dep-check dep-id-or-key))))
+                (if (not (nil? dep-id-or-key))
+                  (do-dep-check dep-id-or-key)
+                  mask))))
           0
           dep-checkers))
 
