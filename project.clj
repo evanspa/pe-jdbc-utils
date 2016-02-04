@@ -26,5 +26,6 @@
                                   [org.postgresql/postgresql "9.3-1102-jdbc41"]]
                    :resource-paths ["test-resources"]}
              :test {:resource-paths ["test-resources"]}}
+  :signing {:gpg-key "evansp2@gmail.com"}
   :repositories [["releases" {:url "https://clojars.org/repo"
                               :creds :gpg}]])
