@@ -17,7 +17,7 @@
   [db-spec seq-name]
   (:nextval (j/query db-spec
                      [(format "select nextval('%s')" seq-name)]
-                     :result-set-fn first)))
+                     {:result-set-fn first})))
 
 (defmulti uniq-constraint-violated? (fn [db-spec _] (subprotocol db-spec)))
 
@@ -116,7 +116,7 @@
 
 (defn compute-deps-not-found-mask
   [entity any-issues-mask dep-checkers]
-  (reduce (fn [mask [entity-load-fn dep-id-or-key dep-not-exist-mask]]
+  (reduce (fn [mask [entity-load-fn dep-id-or-key dep-not-exist-mask nullable]]
             (letfn [(do-dep-check [dep-id]
                       (let [loaded-entity-result (entity-load-fn dep-id)]
                         (if (nil? loaded-entity-result)
@@ -124,7 +124,12 @@
                           mask)))]
               (if (keyword? dep-id-or-key)
                 (if (contains? entity dep-id-or-key)
-                  (do-dep-check (get entity dep-id-or-key))
+                  (let [dep-id (get entity dep-id-or-key)]
+                    (if (not (nil? dep-id))
+                      (do-dep-check dep-id)
+                      (if nullable
+                        mask
+                        (throw (IllegalArgumentException. (format "dependency: [%s] cannot be nil" dep-id-or-key))))))
                   mask)
                 (if (not (nil? dep-id-or-key))
                   (do-dep-check dep-id-or-key)
@@ -375,7 +380,7 @@
                              col
                              op
                              (active-only-where active-only)) col-val]
-                    :result-set-fn first)]
+                    {:result-set-fn first})]
     (when rs
       (rs->entity-fn rs))))
 
@@ -409,7 +414,7 @@
                              (active-only-where active-only))
                      col-val-1
                      col-val-2]
-                    :result-set-fn first)]
+                    {:result-set-fn first})]
     (when rs
       (rs->entity-fn rs))))
 
@@ -452,7 +457,7 @@
                      (active-only-where active-only)
                      (order-by order-by-col order-by-direction))
              col-val]
-            :row-fn rs->entity-fn)))
+            {:row-fn rs->entity-fn})))
 
 (defn load-entities
   ([db-spec
@@ -477,7 +482,7 @@
                      table
                      (active-only-where false active-only)
                      (order-by order-by-col order-by-direction))]
-            :row-fn rs->entity-fn)))
+            {:row-fn rs->entity-fn})))
 
 (defn load-entities-modified-since
   [db-spec
@@ -507,7 +512,7 @@
               col-val
               modified-since-sql
               modified-since-sql]
-             :row-fn rs->entity-fn)))
+             {:row-fn rs->entity-fn})))
 
 (defn most-recent-modified-at
   [db-spec
@@ -531,7 +536,7 @@
                      col-val
                      modified-since-sql
                      modified-since-sql]
-                    :result-set-fn first)]
+                    {:result-set-fn first})]
     (c/from-sql-time (:max rs))))
 
 (defn most-recent-modified-at-overall
