@@ -1,4 +1,4 @@
-(defproject pe-jdbc-utils "0.0.22"
+(defproject pe-jdbc-utils "0.0.23-SNAPSHOT"
   :description "A Clojure library of helper functions when working with JDBC."
   :url "https://github.com/evanspa/pe-jdbc-utils"
   :license {:name "MIT"
